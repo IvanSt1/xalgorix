@@ -1,11 +1,14 @@
+name: testbench
+
 services:
   testbench:
     build:
       context: ./app
       dockerfile: Dockerfile
-    container_name: xalgorix_testbench
+    image: testbench:latest
+    container_name: testbench
     ports:
-      - "127.0.0.1:8088:8000"
+      - "${TESTBENCH_HOST:-127.0.0.1}:${TESTBENCH_PORT:-8088}:8000"
     volumes:
       - ./logs:/app/logs:z
       - testbench_data:/app/data

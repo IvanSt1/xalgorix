@@ -1,16 +1,19 @@
-# Xalgorix tool-invocation testbench
+# Tool-invocation testbench
 
-A small, deliberately vulnerable Flask app used to measure how reliably
-`xalgorix` drives external pentesting tools (sqlmap, ffuf, nuclei) at
+A small, deliberately vulnerable Flask app used to measure how reliably an
+external scanner / agent drives pentesting tools (sqlmap, ffuf, nuclei) at
 login forms.
+
+The testbench is fully self-contained: it runs in Docker and does not depend
+on `make` or any parent project.
 
 ## Layout
 
 - `app/` — Flask application with 5 vulnerable login endpoints + 5 inert pages.
-- `docker-compose.yml` — one container, listens on `127.0.0.1:8088`.
+- `docker-compose.yml` — one container, listens on `127.0.0.1:8088` by default.
 - `logs/` — request log written by the app (mounted from the container).
-- `analyze/extract_commands.py` — parses `~/xalgorix-data/<target>/.../scan.json`
-  and produces a classification report at `REPORT.md`.
+- `analyze/extract_commands.py` — optional helper that parses scanner output
+  (e.g. `~/xalgorix-data/<target>/.../scan.json`) into `REPORT.md`.
 - `REPORT_TEMPLATE.md` — stub report used when no scans have been recorded yet.
 
 ## Endpoints
@@ -29,67 +32,47 @@ must correctly pick `-r request.txt`, `--data`, `--cookie="...=*"`, or
 `--csrf-token`/`--csrf-url` — this is the core thing the testbench
 measures.
 
-## Usage
+## Quick start
+
+Requires only Docker (with the Compose plugin). Run from this directory:
 
 ```bash
-# From the xalgorix/ directory:
-make bench-up         # docker compose up -d --build
-make bench-logs       # tail the request log
-make bench-down       # docker compose down (preserves logs)
-make bench-clean      # wipe logs
+# build & start in background
+docker compose up -d --build
 
-# Run a scan:
-xalgorix --target http://127.0.0.1:8088
+# tail the request log written by the app
+tail -f logs/requests.log
 
-# After scans, classify what sqlmap/ffuf/nuclei commands were issued:
-make bench-report     # writes testbench/REPORT.md
+# stop (preserves logs and DB volume)
+docker compose down
+
+# stop and wipe the database volume
+docker compose down -v
 ```
 
-## Fixes applied on top of the baseline
+The app will be available at <http://127.0.0.1:8088>. To change the host or
+port, set environment variables before running compose:
 
-The testbench was built to measure four specific reliability problems in
-xalgorix's tool invocation. Each fix is independent and ships behind the
-same binary — no feature flags required.
+```bash
+TESTBENCH_HOST=0.0.0.0 TESTBENCH_PORT=9000 docker compose up -d --build
+```
 
-1. **sqlmap recipe card** added to Phase 6C of the agent system prompt
-   (`internal/agent/agent.go`) — four concrete copy-paste commands for
-   form-urlencoded / JSON / CSRF / cookie logins, plus an explicit
-   invented-flag blacklist (`--json`, `--auto`, `--full`, ...).
-2. **`sqlmap_scan` structured tool** (`internal/tools/sqlmaptool/`) —
-   one of five recipes (`get|form|json|csrf|cookie`) is selected via
-   parameters; the tool builds the sqlmap command itself, always sets
-   `--batch --random-agent --flush-session --output-dir=...` and fails
-   fast on invalid arguments. Failures are now counted per-tool instead
-   of against the shared `terminal_execute` circuit breaker.
-3. **Package map sync** (`internal/tools/terminal/terminal.go`) — added
-   `wpscan`, `joomscan`, `nikto`, `whatweb`, `wafw00f`, `testssl`,
-   `sslyze`, `dirsearch`, `arjun`, `theharvester`, `hydra`, `hashid`,
-   `hashcat` so they auto-install instead of returning exit 127 and
-   tripping the circuit breaker.
-4. **Point-MCP adapter** (`internal/tools/mcp/`) — opt-in via
-   `XALGORIX_MCP_SERVERS="name=cmd args;..."`. Each configured MCP
-   stdio server contributes its tools as `mcp_<server>_<tool>` without
-   rewriting the existing `tools.Registry`. Nothing happens unless the
-   env variable is set.
+> Reminder: this app is intentionally vulnerable. Keep the bind address on
+> `127.0.0.1` unless you fully trust the network.
 
-## Verifying the structured tool end-to-end
+## Running a scan against it
 
-Once xalgorix is rebuilt (` + "`" + `make build` + "`" + `), a scan that calls
-` + "`" + `sqlmap_scan` + "`" + ` on the testbench should show canonical, reproducible
-commands in ` + "`" + `logs/requests.log` + "`" + `:
+Point any scanner / agent at `http://127.0.0.1:8088`, e.g.:
 
-- ` + "`" + `POST /login1` + "`" + ` with ` + "`" + `Content-Type: application/x-www-form-urlencoded` + "`" + `
-  and sqlmap-generated payloads in both ` + "`" + `username` + "`" + ` and ` + "`" + `password` + "`" + `.
-- ` + "`" + `POST /login2` + "`" + ` with ` + "`" + `Content-Type: application/json` + "`" + ` and payloads
-  inside JSON strings.
-- ` + "`" + `GET /login3 → POST /login3` + "`" + ` pairs where sqlmap scrapes a fresh
-  ` + "`" + `csrf_token` + "`" + ` on every probe.
-- ` + "`" + `POST /login4` + "`" + ` where the ` + "`" + `session_hint` + "`" + ` cookie value cycles
-  through sqlmap probes and the server sleeps on ` + "`" + `pg_sleep` + "`" + `.
-- ` + "`" + `GET /login5?user=...&pass=...` + "`" + ` — easy sanity check.
+```bash
+sqlmap -u 'http://127.0.0.1:8088/login5?user=a&pass=a' --batch
+```
 
-` + "`" + `testbench/analyze/extract_commands.py` + "`" + ` turns all of that into a
-classification table.
+After scans, optionally classify what commands were issued:
+
+```bash
+python3 analyze/extract_commands.py /path/to/scan-output-dir > REPORT.md
+```
 
 ## Safety
 
