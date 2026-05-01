@@ -20,12 +20,14 @@ import (
 	"github.com/xalgord/xalgorix/v4/internal/tools/browser"
 	"github.com/xalgord/xalgorix/v4/internal/tools/fileedit"
 	"github.com/xalgord/xalgorix/v4/internal/tools/finish"
+	"github.com/xalgord/xalgorix/v4/internal/tools/mcp"
 	"github.com/xalgord/xalgorix/v4/internal/tools/notes"
 	"github.com/xalgord/xalgorix/v4/internal/tools/pageagent"
 	"github.com/xalgord/xalgorix/v4/internal/tools/proxy"
 	"github.com/xalgord/xalgorix/v4/internal/tools/python"
 	"github.com/xalgord/xalgorix/v4/internal/tools/reporting"
 	skillstool "github.com/xalgord/xalgorix/v4/internal/tools/skills"
+	"github.com/xalgord/xalgorix/v4/internal/tools/sqlmaptool"
 	"github.com/xalgord/xalgorix/v4/internal/tools/terminal"
 	"github.com/xalgord/xalgorix/v4/internal/tools/websearch"
 )
@@ -80,6 +82,7 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 	reg := tools.NewRegistry()
 
 	terminal.Register(reg)
+	sqlmaptool.Register(reg)
 	fileedit.Register(reg)
 	proxy.Register(reg)
 	browser.Register(reg)
@@ -93,6 +96,7 @@ func NewAgent(cfg *config.Config, name string, events chan Event) *Agent {
 	websearch.Register(reg)
 	agentmail.Register(reg)
 	skillstool.Register(reg, cfg.SkillsDir)
+	_ = mcp.Register(reg) // no-op unless XALGORIX_MCP_SERVERS is set
 
 	hookReg := NewHookRegistry()
 	RegisterDefaultHooks(hookReg)
@@ -1555,6 +1559,116 @@ for payload, sqli_type in sqli_payloads:
 #### Step 6C: Automated Scanner (ONLY after manual confirmation)
 **Use sqlmap/dalfox ONLY on parameters that showed vulnerability indicators in Steps 6A/6B.**
 
+##### PREFERRED: use the ` + "`" + `sqlmap_scan` + "`" + ` structured tool instead of raw terminal_execute
+
+The agent has a dedicated ` + "`" + `sqlmap_scan` + "`" + ` tool (tools/sqlmaptool) that accepts
+parameters instead of a free-form shell command and assembles the sqlmap
+invocation for you. It GUARANTEES ` + "`" + `--batch` + "`" + `, a unique ` + "`" + `--output-dir` + "`" + `,
+` + "`" + `--random-agent` + "`" + ` and correct method/header/cookie flags. You cannot
+forget ` + "`" + `--data` + "`" + `, cannot invent flags, and failures only trip the sqlmap
+circuit breaker (not the shared terminal_execute one).
+
+Call it like this:
+
+` + "`" + `xml` + "`" + `
+<function=sqlmap_scan>
+<parameter=recipe>form</parameter>
+<parameter=url>https://TARGET/login</parameter>
+<parameter=data>username=admin&password=test</parameter>
+<parameter=params>username,password</parameter>
+<parameter=level>3</parameter>
+<parameter=risk>2</parameter>
+</function>
+` + "`" + `
+
+Recipes:
+- ` + "`" + `get` + "`" + ` — URL already contains the vulnerable query string.
+- ` + "`" + `form` + "`" + ` — form-urlencoded POST; pass ` + "`" + `data` + "`" + ` as ` + "`" + `a=1&b=2` + "`" + `.
+- ` + "`" + `json` + "`" + ` — JSON POST; Content-Type header is added automatically.
+- ` + "`" + `csrf` + "`" + ` — adds ` + "`" + `--csrf-token` + "`" + `/` + "`" + `--csrf-url` + "`" + `; required when the form has a CSRF token.
+- ` + "`" + `cookie` + "`" + ` — SQLi inside a cookie value; pass ` + "`" + `cookie` + "`" + ` with a ` + "`" + `*` + "`" + ` marker on the injectable value.
+
+Only fall back to raw ` + "`" + `terminal_execute sqlmap ...` + "`" + ` when the injection
+shape does not fit any of the five recipes above (rare). If you do fall
+back, follow the recipe card below verbatim.
+
+##### sqlmap recipe card — copy these EXACTLY, do NOT invent flags
+
+**Rule 0 — invented-flag blacklist.** sqlmap has a fixed flag set. If you are
+not 100% certain a flag exists, run ` + "`" + `sqlmap -hh | head -250` + "`" + ` via terminal_execute
+FIRST and read the real flag list. NEVER guess flags like ` + "`" + `--json` + "`" + `, ` + "`" + `--auto` + "`" + `,
+` + "`" + `--full` + "`" + `, ` + "`" + `--scan` + "`" + `, ` + "`" + `--quick` + "`" + `, ` + "`" + `--fast` + "`" + `, ` + "`" + `--deep` + "`" + `, ` + "`" + `--brute` + "`" + ` —
+they do not exist and the run will fail instantly.
+
+**Rule 1 — always include these.** ` + "`" + `--batch` + "`" + ` (no interactive prompts),
+` + "`" + `--output-dir=./sqlmap_<slug>/` + "`" + ` (isolates artefacts), ` + "`" + `--flush-session` + "`" + ` on the
+first run against a new target, ` + "`" + `--random-agent` + "`" + ` (avoids obvious default UA).
+
+**Rule 2 — pick the recipe by login shape, not by guess.** Figure out the
+request shape from Burp-style inspection (` + "`" + `curl -v` + "`" + ` with the real form) and
+then pick exactly one of the four recipes below.
+
+` + "`" + `bash` + "`" + `
+# ───────────────────────────────────────────────────────────────────────
+# RECIPE A — form-urlencoded POST login (most common)
+# Save the exact request first (capture from curl -v or Burp), then use -r.
+# This is the SAFEST recipe because sqlmap re-parses headers/body verbatim.
+cat > /tmp/login.req <<'REQ'
+POST /login HTTP/1.1
+Host: TARGET
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 29
+
+username=admin&password=test
+REQ
+sqlmap -r /tmp/login.req --batch --level=3 --risk=2 --random-agent \
+       --threads=5 --output-dir=./sqlmap_login_form/ \
+       -p username,password --flush-session
+
+# ───────────────────────────────────────────────────────────────────────
+# RECIPE B — JSON POST login
+# Use --data with literal JSON and --headers (NOT --header) to set content-type.
+# Mark injection points with a '*' inside --data or use -p to name the field.
+sqlmap -u "https://TARGET/login" --method=POST \
+       --data='{"username":"admin*","password":"test"}' \
+       --headers="Content-Type: application/json" \
+       --batch --level=3 --risk=2 --random-agent \
+       --output-dir=./sqlmap_login_json/ --flush-session
+
+# ───────────────────────────────────────────────────────────────────────
+# RECIPE C — CSRF-protected POST login
+# sqlmap fetches --csrf-url, scrapes the token whose name is --csrf-token,
+# and re-injects it on every request. Do NOT try to hardcode the token.
+sqlmap -u "https://TARGET/login" --method=POST \
+       --data="username=admin&password=test&csrf_token=PLACEHOLDER" \
+       --csrf-token=csrf_token --csrf-url="https://TARGET/login" \
+       --batch --level=3 --risk=2 --random-agent \
+       --output-dir=./sqlmap_login_csrf/ --flush-session
+
+# ───────────────────────────────────────────────────────────────────────
+# RECIPE D — SQLi in cookie (session_hint, sid, lang, ...)
+# Mark the vulnerable cookie value with '*'. Raise --level to 3+ because
+# sqlmap only tests cookies when level >= 2.
+sqlmap -u "https://TARGET/" \
+       --cookie="session_hint=*; lang=en" --level=3 --risk=2 \
+       --batch --random-agent \
+       --output-dir=./sqlmap_login_cookie/ --flush-session
+
+# ───────────────────────────────────────────────────────────────────────
+# RECIPE E — GET-parameter SQLi (lightweight sanity check)
+# Only use this when the target truly accepts credentials via query string.
+sqlmap -u "https://TARGET/page?param=value" --batch --level=3 --risk=2 \
+       --random-agent --threads=5 --output-dir=./sqlmap_get/ --flush-session
+` + "`" + `
+
+##### sqlmap troubleshooting cheatsheet
+- ` + "`" + `[CRITICAL] unable to connect to the target URL` + "`" + ` → check proxy / VPN / firewall BEFORE retrying.
+- ` + "`" + `[WARNING] ... appears to be not injectable` + "`" + ` → raise ` + "`" + `--level` + "`" + ` or ` + "`" + `--risk` + "`" + `, or try a different technique via ` + "`" + `--technique=BEUSTQ` + "`" + `.
+- ` + "`" + `[CRITICAL] all tested parameters do not appear to be injectable` + "`" + ` → you probably picked the wrong recipe (GET vs POST vs cookie). Re-read the request.
+- ` + "`" + `unknown option ...` + "`" + ` → you invented a flag. Run ` + "`" + `sqlmap -hh | head -250` + "`" + `, re-read the card above, retry.
+- CSRF test requires the ` + "`" + `--csrf-url` + "`" + ` page to actually expose the token in HTML or a ` + "`" + `Set-Cookie` + "`" + ` header.
+
+##### Other Step 6C scanners
 ` + "`" + `bash` + "`" + `
 # SQLi — ONLY on URLs where manual testing showed SQL errors or time delays
 # DO NOT run sqlmap on all URLs blindly

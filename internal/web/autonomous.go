@@ -38,7 +38,8 @@ For EVERY potential vulnerability found in Phase 2, you MUST:
 
 **SQL Injection:**
 - Confirm with time-based: ` + "`" + `' AND SLEEP(5)--` + "`" + ` (measure response time)
-- Extract data: ` + "`" + `sqlmap -u "URL" --dbs --batch --risk=3 --level=5` + "`" + `
+- Extract data with the sqlmap recipe that matches the request shape (see "sqlmap recipe card" in Phase 6C of the agent checklist — GET=` + "`" + `-u` + "`" + `, form POST=` + "`" + `-r login.req` + "`" + `, JSON=` + "`" + `--method=POST --data=... --headers=...` + "`" + `, cookie=` + "`" + `--cookie="name=*"` + "`" + `, CSRF=` + "`" + `--csrf-token --csrf-url` + "`" + `). Do NOT invent sqlmap flags; if unsure run ` + "`" + `sqlmap -hh | head -250` + "`" + ` first.
+- Always include ` + "`" + `--batch --output-dir=./sqlmap_<slug>/ --random-agent` + "`" + `.
 - If data extracted → report as CRITICAL/HIGH with the dumped data as proof
 - If only time-based confirmed → report as HIGH with timing measurements
 

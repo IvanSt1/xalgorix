@@ -1,0 +1,20 @@
+services:
+  testbench:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: xalgorix_testbench
+    ports:
+      - "127.0.0.1:8088:8000"
+    volumes:
+      - ./logs:/app/logs:z
+      - testbench_data:/app/data
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/').read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  testbench_data:

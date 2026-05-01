@@ -282,6 +282,26 @@ var packageMap = map[string]string{
 	"bc":      "bc",
 	// SQL
 	"sqlmap": "sqlmap",
+	// Tools frequently referenced by the system prompt. These are added
+	// to the auto-install map so the agent does not repeatedly hit
+	// "command not found" / exit 127, which would otherwise be counted
+	// against the shared terminal_execute circuit breaker.
+	"hydra":        "hydra",
+	"whatweb":      "whatweb",
+	"wafw00f":      "wafw00f",
+	"testssl":      "testssl.sh",
+	"testssl.sh":   "testssl.sh",
+	"sslyze":       "sslyze",
+	"wpscan":       "wpscan",
+	"joomscan":     "joomscan",
+	"nikto":        "nikto",
+	"dirsearch":    "dirsearch",
+	"arjun":        "arjun",
+	"theharvester": "theharvester",
+	"theHarvester": "theharvester",
+	"john":         "john",
+	"hashid":       "hashid",
+	"hashcat":      "hashcat",
 }
 
 // decode decodes a base64 string
@@ -415,6 +435,15 @@ func ensureVenv() {
 			log.Printf("Warning: failed to create Python venv at %s: %v", venvPath, err)
 		}
 	}
+}
+
+// RunShell is the exported entry point other in-process tools (e.g. the
+// structured sqlmap_scan tool) use to execute a shell command with the
+// same PATH, venv activation, timeout tiers, process tracking and
+// streaming callbacks as terminal_execute. It returns the captured
+// stdout+stderr and the process exit code.
+func RunShell(command string) (string, int) {
+	return runShell(command)
 }
 
 func runShell(command string) (string, int) {
@@ -645,7 +674,17 @@ func resolvePackage(cmd string) string {
 func installPackage(pkg string) string {
 	// Special handling for pipx-installed tools
 	pipxTools := map[string]string{
-		"scrapling": "scrapling",
+		"scrapling":    "scrapling",
+		"wafw00f":      "wafw00f",
+		"dirsearch":    "dirsearch",
+		"arjun":        "arjun",
+		"theharvester": "theHarvester",
+		"theHarvester": "theHarvester",
+	}
+
+	// Ruby gems
+	gemTools := map[string]string{
+		"wpscan": "wpscan",
 	}
 
 	// Special handling for Cargo (Rust) tools
@@ -695,7 +734,7 @@ func installPackage(pkg string) string {
 
 	// pipx-installed tools (Python)
 	if pipxPkg, ok := pipxTools[pkg]; ok {
-		installCmd := fmt.Sprintf("pipx install %s 2>&1 || pip3 install %s 2>&1", pipxPkg, pipxPkg)
+		installCmd := fmt.Sprintf("pipx install %s 2>&1 || pip3 install --break-system-packages %s 2>&1", pipxPkg, pipxPkg)
 		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
@@ -704,6 +743,25 @@ func installPackage(pkg string) string {
 			return fmt.Sprintf("[install %s via pipx/pip failed: %s]\n%s", pkg, err, truncate(string(out)))
 		}
 		return fmt.Sprintf("[installed %s via pipx successfully]", pkg)
+	}
+
+	// Ruby gems (wpscan etc.) — try apt first (ships on Kali), fall back to gem.
+	if gemPkg, ok := gemTools[pkg]; ok {
+		installCmd := fmt.Sprintf(
+			"apt-get install -y -q %s 2>&1 || gem install --no-document %s 2>&1",
+			gemPkg, gemPkg,
+		)
+		if os.Getuid() != 0 {
+			installCmd = "sudo " + installCmd
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "-c", installCmd)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("[install %s via apt/gem failed: %s]\n%s", pkg, err, truncate(string(out)))
+		}
+		return fmt.Sprintf("[installed %s successfully]", pkg)
 	}
 
 	// Cargo (Rust) tools
@@ -1029,6 +1087,8 @@ func extractCommands(cmd string) []string {
 		"arjun", "x8", "jq", "xmllint", "hydra", "john",
 		"git", "dirsearch", "feroxbuster", "testssl", "sslyze",
 		"okenv", "ds_store", "gitdumper", "githacker",
+		"wpscan", "joomscan", "nikto", "theharvester",
+		"dalfox", "wfuzz", "hashid", "hashcat",
 	}
 
 	found := make(map[string]bool)
