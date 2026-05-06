@@ -35,12 +35,18 @@ func setupTestSkills(t *testing.T) string {
 	return dir
 }
 
+// makeFn returns a fully-wired read_skill executor for tests.
+func makeFn(dir string) func(map[string]string) (tools.Result, error) {
+	fsys := os.DirFS(dir)
+	return makeReadSkill(fsys, makeListSkills(fsys))
+}
+
 func TestReadSkill_Basic(t *testing.T) {
 	dir := setupTestSkills(t)
 	reg := tools.NewRegistry()
 	Register(reg, "")
 
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
 	// Read existing skill
 	result, err := fn(map[string]string{"name": "sql_injection"})
@@ -54,7 +60,7 @@ func TestReadSkill_Basic(t *testing.T) {
 
 func TestReadSkill_WithExtension(t *testing.T) {
 	dir := setupTestSkills(t)
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
 	// Should work with .md extension too
 	result, err := fn(map[string]string{"name": "sql_injection.md"})
@@ -68,7 +74,7 @@ func TestReadSkill_WithExtension(t *testing.T) {
 
 func TestReadSkill_DifferentCategory(t *testing.T) {
 	dir := setupTestSkills(t)
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
 	result, err := fn(map[string]string{"name": "graphql", "category": "protocols"})
 	if err != nil {
@@ -81,7 +87,7 @@ func TestReadSkill_DifferentCategory(t *testing.T) {
 
 func TestReadSkill_NotFound(t *testing.T) {
 	dir := setupTestSkills(t)
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
 	result, _ := fn(map[string]string{"name": "nonexistent_skill"})
 	if result.Error == "" {
@@ -92,19 +98,32 @@ func TestReadSkill_NotFound(t *testing.T) {
 	}
 }
 
+// TestReadSkill_EmptyName verifies the loop-breaking fallback: when the
+// LLM emits read_skill with no name, the tool returns the catalogue plus
+// a corrective hint instead of erroring (the old behaviour caused some
+// models to issue dozens of identical empty calls in a row).
 func TestReadSkill_EmptyName(t *testing.T) {
 	dir := setupTestSkills(t)
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
-	result, _ := fn(map[string]string{"name": ""})
-	if result.Error == "" {
-		t.Error("expected error for empty name")
+	result, err := fn(map[string]string{"name": ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("empty-name should not be a hard error any more, got: %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "called without `name`") {
+		t.Errorf("expected corrective hint in output, got: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "sql_injection") {
+		t.Errorf("expected catalogue contents in output, got: %s", result.Output)
 	}
 }
 
 func TestReadSkill_PathTraversal(t *testing.T) {
 	dir := setupTestSkills(t)
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
 	// Attempt path traversal
 	traversalInputs := []string{
@@ -123,7 +142,7 @@ func TestReadSkill_PathTraversal(t *testing.T) {
 
 func TestReadSkill_CrossCategorySearch(t *testing.T) {
 	dir := setupTestSkills(t)
-	fn := makeReadSkill(os.DirFS(dir))
+	fn := makeFn(dir)
 
 	// Request skill from protocols category without specifying category
 	// (defaults to vulnerabilities, then searches all categories)

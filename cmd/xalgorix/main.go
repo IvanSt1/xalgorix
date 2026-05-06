@@ -80,8 +80,13 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Auto-update check on every start (skip if --update flag is used since that handles it)
-	if !args.update {
+	// Auto-update on startup is OFF by default. It hits the GitHub releases
+	// API, which (a) costs a few seconds of latency on every run, (b) gets
+	// rate-limited on shared workstations, and (c) silently restarts the
+	// process mid-launch which is surprising for an interactive tool.
+	// To re-enable, export XALGORIX_AUTOUPDATE=1. Use `xalgorix --update`
+	// for an explicit one-shot update.
+	if !args.update && os.Getenv("XALGORIX_AUTOUPDATE") == "1" {
 		autoUpdate()
 	}
 

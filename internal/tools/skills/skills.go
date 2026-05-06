@@ -22,14 +22,19 @@ func Register(r *tools.Registry, _ string) {
 		// Should not happen unless embed is empty
 		subFS = embeddedSkills
 	}
+	listSkills := makeListSkills(subFS)
 	r.Register(&tools.Tool{
 		Name:        "read_skill",
 		Description: "Load a vulnerability/protocol/framework skill to get deep testing methodology, payloads, and techniques. Use this BEFORE testing a specific vulnerability class (e.g., read_skill name=nosql_injection before testing for NoSQL injection). This gives you expert-level knowledge including exact payloads, bypass techniques, and chaining strategies that dramatically improve your testing depth.",
+		// `name` is intentionally NOT marked Required: when the LLM emits an
+		// empty <function=read_skill/>, the tool falls back to list_skills
+		// with a hint, instead of returning a "missing required parameter"
+		// error that some models loop on indefinitely.
 		Parameters: []tools.Parameter{
-			{Name: "name", Description: "Skill name without .md extension (e.g., nosql_injection, http_request_smuggling, oauth2_attacks, prototype_pollution). Use list_skills to see all available skills.", Required: true},
+			{Name: "name", Description: "Skill name without .md extension (e.g., nosql_injection, http_request_smuggling, oauth2_attacks, prototype_pollution). Use list_skills to see all available skills. If omitted, this tool will return the list of available skills.", Required: false},
 			{Name: "category", Description: "Category folder: vulnerabilities, protocols, frameworks, cloud, reconnaissance. Default: vulnerabilities", Required: false},
 		},
-		Execute: makeReadSkill(subFS),
+		Execute: makeReadSkill(subFS, listSkills),
 	})
 
 	r.Register(&tools.Tool{
@@ -38,11 +43,11 @@ func Register(r *tools.Registry, _ string) {
 		Parameters: []tools.Parameter{
 			{Name: "category", Description: "Filter by category: vulnerabilities, protocols, frameworks, cloud, reconnaissance. Omit to list all.", Required: false},
 		},
-		Execute: makeListSkills(subFS),
+		Execute: listSkills,
 	})
 }
 
-func makeReadSkill(fsys fs.FS) func(args map[string]string) (tools.Result, error) {
+func makeReadSkill(fsys fs.FS, listFallback func(map[string]string) (tools.Result, error)) func(args map[string]string) (tools.Result, error) {
 	return func(args map[string]string) (tools.Result, error) {
 		name := strings.TrimSpace(args["name"])
 		category := strings.TrimSpace(args["category"])
@@ -59,7 +64,15 @@ func makeReadSkill(fsys fs.FS) func(args map[string]string) (tools.Result, error
 		}, category)
 
 		if name == "" {
-			return tools.Result{Error: "skill name is required"}, nil
+			// Some models emit `<function=read_skill/>` with no parameters
+			// and then loop on the resulting "missing required parameter"
+			// error. Break the loop by surfacing the actual catalogue so
+			// the model has something useful to act on next iteration.
+			res, _ := listFallback(map[string]string{"category": category})
+			hint := "⚠️ read_skill called without `name` — returning the catalogue. " +
+				"On your NEXT iteration call read_skill with name=<one of the items below>. " +
+				"Do NOT call read_skill again with no parameters; pick a name now.\n\n"
+			return tools.Result{Output: hint + res.Output}, nil
 		}
 
 		// Sanitize name — prevent path traversal, allow alphanum, dash, underscore, dot
