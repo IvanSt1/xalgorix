@@ -94,7 +94,13 @@ func Register(r *tools.Registry) {
 			{Name: "endpoint", Description: "Affected endpoint", Required: false},
 			{Name: "method", Description: "HTTP method", Required: false},
 			{Name: "cve", Description: "CVE identifier if known", Required: false},
-			{Name: "cvss", Description: "CVSS 3.1 base score (0.0-10.0). MUST match severity: critical=9.0-10.0, high=7.0-8.9, medium=4.0-6.9, low=0.1-3.9, info=0.0", Required: true},
+			// cvss is intentionally NOT Required. reportVuln auto-derives a
+			// sensible default from `severity` when missing (see the
+			// switch around `if cvss == 0` below). Marking it required
+			// caused the registry to reject calls before that fallback
+			// could run, sending the LLM into the same retry loop as
+			// the old read_skill bug.
+			{Name: "cvss", Description: "CVSS 3.1 base score (0.0-10.0). Should match severity: critical=9.0-10.0, high=7.0-8.9, medium=4.0-6.9, low=0.1-3.9, info=0.0. If omitted, a default is auto-derived from `severity`.", Required: false},
 			{Name: "cvss_vector", Description: "CVSS 3.1 vector string, e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H. Components: AV(Attack Vector):N/A/L/P, AC(Attack Complexity):L/H, PR(Privileges Required):N/L/H, UI(User Interaction):N/R, S(Scope):U/C, C(Confidentiality):N/L/H, I(Integrity):N/L/H, A(Availability):N/L/H", Required: false},
 			{Name: "technical_analysis", Description: "Technical details of the vulnerability", Required: false},
 			{Name: "poc_description", Description: "Step-by-step PoC description", Required: false},

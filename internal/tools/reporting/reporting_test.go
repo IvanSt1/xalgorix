@@ -1,7 +1,10 @@
 package reporting
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/xalgord/xalgorix/v4/internal/tools"
 )
 
 func TestCheckFalsePositive_MissingHeaders(t *testing.T) {
@@ -232,4 +235,72 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestRegister_CVSSIsOptional guards against a regression where `cvss`
+// was marked Required:true. The registry validates required parameters
+// BEFORE the tool's Execute runs, so the auto-derive-CVSS-from-severity
+// fallback in reportVuln never fired and the LLM looped on
+// "missing required parameter 'cvss'" for many iterations, eventually
+// giving up via finish() with zero vulnerabilities recorded.
+func TestRegister_CVSSIsOptional(t *testing.T) {
+	reg := tools.NewRegistry()
+	Register(reg)
+	tool, ok := reg.Get("report_vulnerability")
+	if !ok {
+		t.Fatal("report_vulnerability not registered")
+	}
+	for _, p := range tool.Parameters {
+		if p.Name == "cvss" && p.Required {
+			t.Fatalf("cvss must NOT be Required — auto-derived from severity. " +
+				"This caused the agent to loop on missing-cvss errors instead " +
+				"of getting the auto-fallback.")
+		}
+	}
+}
+
+// TestReportVulnerability_AutoDerivesCVSS confirms that a call with no
+// cvss flag still records the vulnerability and assigns a CVSS based on
+// the supplied severity.
+func TestReportVulnerability_AutoDerivesCVSS(t *testing.T) {
+	ResetVulnerabilities()
+	t.Cleanup(ResetVulnerabilities)
+
+	reg := tools.NewRegistry()
+	Register(reg)
+
+	res, err := reg.Execute("report_vulnerability", map[string]string{
+		"title":               "SQLi in /login1 username param",
+		"severity":            "critical",
+		"description":         "Authentication bypass via SQL injection on POST /login1.",
+		"exploitation_proof":  "Sent username=admin' OR '1'='1'-- and received <h2>Welcome, admin</h2> — admin session granted without password.",
+		"verification_method": "exploited",
+		"endpoint":            "/login1",
+		"method":              "POST",
+		// cvss intentionally omitted — must NOT be rejected.
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute returned res.Error: %q", res.Error)
+	}
+	if strings.Contains(res.Output, "missing required parameter") {
+		t.Fatalf("registry rejected the call: %s", res.Output)
+	}
+	if !strings.Contains(res.Output, "✅ Vulnerability reported") {
+		t.Fatalf("expected success banner, got: %s", res.Output)
+	}
+
+	vulns := GetVulnerabilities()
+	if len(vulns) != 1 {
+		t.Fatalf("expected 1 vulnerability recorded, got %d", len(vulns))
+	}
+	v := vulns[0]
+	if v.CVSS < 9.0 {
+		t.Errorf("expected critical to auto-derive CVSS >= 9.0, got %.1f", v.CVSS)
+	}
+	if v.Severity != "critical" {
+		t.Errorf("expected severity critical, got %q", v.Severity)
+	}
 }
